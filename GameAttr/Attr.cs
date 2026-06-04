@@ -12,6 +12,11 @@ public class Attr<TKey, TModId, TValue>
 {
     private readonly ConcurrentDictionary<TKey, ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>> _modifiers = new();
 
+    /// <summary>Set or overwrite a modifier for the given attribute key.</summary>
+    /// <param name="key">Attribute key.</param>
+    /// <param name="type">Modifier type (BaseValue, PercentBonus, FlatBonus).</param>
+    /// <param name="modId">Unique modifier identifier.</param>
+    /// <param name="value">Modifier value.</param>
     public void SetModifier(TKey key, ModifierType type, TModId modId, TValue value)
     {
         ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>> byType =
@@ -23,12 +28,10 @@ public class Attr<TKey, TModId, TValue>
         byModId[modId] = value;
     }
 
-    /// <summary>
-    /// Get Attr Value
-    /// <remarks>Value = base * (TValue.One + percent) + flat</remarks>
-    /// </summary>
-    /// <param name="key">Attr Key which typed TKey</param>
-    /// <returns></returns>
+    /// <summary>Get the computed attribute value.</summary>
+    /// <remarks>Value = base × (1 + percentBonus) + flatBonus</remarks>
+    /// <param name="key">Attribute key.</param>
+    /// <returns>Computed value, or <c>TValue.Zero</c> if the key has no base modifiers.</returns>
     public TValue GetValue(TKey key)
     {
         if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
@@ -48,6 +51,11 @@ public class Attr<TKey, TModId, TValue>
         return baseValue * (TValue.One + percentBonus) + flatBonus;
     }
 
+    /// <summary>Remove a specific modifier by key, type, and id.</summary>
+    /// <param name="key">Attribute key.</param>
+    /// <param name="type">Modifier type.</param>
+    /// <param name="modId">Modifier identifier.</param>
+    /// <returns><c>true</c> if the modifier was found and removed.</returns>
     public bool RemoveModifier(TKey key, ModifierType type, TModId modId)
     {
         if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
@@ -57,20 +65,39 @@ public class Attr<TKey, TModId, TValue>
         return byModId.TryRemove(modId, out _);
     }
 
+    /// <summary>Remove a modifier by key and id across all modifier types.</summary>
+    /// <param name="key">Attribute key.</param>
+    /// <param name="modId">Modifier identifier.</param>
+    /// <returns><c>true</c> if any modifier with the given id was removed.</returns>
     public bool RemoveModifier(TKey key, TModId modId)
     {
         if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
             return false;
         // Remove all mod id by modId for any attributes
-        return byType.Select(x => x.Value.TryRemove(modId, out _))
-            .Any(x => x);
+        List<bool> results = byType.Select(x => x.Value.TryRemove(modId, out _)).ToList();
+        return results.Any(x => x);
     }
 
+    /// <summary>Remove all modifiers matching the given id across all keys and types.</summary>
+    /// <param name="modId">Modifier identifier.</param>
+    /// <returns><c>true</c> if any modifier was removed.</returns>
+    public bool RemoveModifier(TModId modId)
+    {
+        List<bool> results = _modifiers.Values
+            .SelectMany(byType => byType.Values)
+            .Select(byModId => byModId.TryRemove(modId, out _))
+            .ToList();
+        return results.Any(x => x);
+    }
+
+    /// <summary>Remove all modifiers for the given attribute key.</summary>
+    /// <param name="key">Attribute key.</param>
     public void RemoveAllModifiers(TKey key)
     {
         _modifiers.TryRemove(key, out _);
     }
 
+    /// <summary>Remove all modifiers for all attribute keys.</summary>
     public void Clear()
     {
         _modifiers.Clear();
@@ -86,6 +113,7 @@ public class Attr<TKey, TModId, TValue>
         return sum;
     }
 
+    /// <summary>Return a JSON snapshot of all modifiers.</summary>
     public override string ToString()
     {
         StringBuilder stringBuilder = new();
