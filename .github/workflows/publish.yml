@@ -1,0 +1,55 @@
+name: Publish to NuGet
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj', '**/*.props', '**/packages.lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Read version from csproj
+        id: version
+        run: |
+          VERSION=$(grep -oP '(?<=<Version>).*(?=</Version>)' GameAttr/GameAttr.csproj)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Package version: $VERSION"
+
+      - name: Check version tag does not exist
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+          if git tag -l "$TAG" | grep -q .; then
+            echo "::error::Tag $TAG already exists — version $VERSION has already been published."
+            echo "::error::Update <Version> in GameAttr/GameAttr.csproj before publishing."
+            exit 1
+          fi
+          echo "Version $VERSION is new (no tag $TAG found)"
+
+      - name: Check formatting
+        run: dotnet format --verify-no-changes
+
+      - name: Run tests
+        run: dotnet test -c Release
+
+      - name: Pack
+        run: dotnet pack GameAttr/GameAttr.csproj -c Release -o out
+
+      - name: Push to NuGet (Trusted Publishing)
+        run: dotnet nuget push out/*.nupkg --source https://api.nuget.org/v3/index.json

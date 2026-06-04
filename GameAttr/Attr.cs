@@ -5,6 +5,7 @@ using System.Text.Json;
 
 namespace GameAttr;
 
+/// <summary>A generic attribute system for games.</summary>
 public class Attr<TKey, TModId, TValue>
     where TKey : notnull
     where TModId : notnull
