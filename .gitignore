@@ -6,3 +6,5 @@ riderModule.iml
 *.user
 
 .claude/
+**/CoverageReport/
+**/TestResults/

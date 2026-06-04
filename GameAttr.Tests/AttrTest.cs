@@ -145,6 +145,14 @@ public class AttrTest
         Assert.IsFalse(attr.RemoveModifier("hp", ModifierType.BaseValue, "mod1"));
     }
 
+    [TestMethod]
+    public void RemoveModifier_ByKeyTypeAndModId_TypeNotExist_ReturnsFalse()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("hp", ModifierType.BaseValue, "base", 100);
+        Assert.IsFalse(attr.RemoveModifier("hp", ModifierType.PercentBonus, "mod1"));
+    }
+
     #endregion
 
     #region Remove Modifiers by Key + ModId (across types)
