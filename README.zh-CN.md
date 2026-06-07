@@ -47,7 +47,7 @@
 
 ```xml
 <!-- 通过 NuGet 引用或直接引用项目 -->
-<PackageReference Include="GameAttr" Version="1.0.0" />
+<PackageReference Include="GameAttr" Version="0.2.0" />
 ```
 
 ```csharp

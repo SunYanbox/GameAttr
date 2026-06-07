@@ -48,7 +48,7 @@ Where:
 
 ```xml
 <!-- Add from NuGet or reference the project directly -->
-<PackageReference Include="GameAttr" Version="1.0.0" />
+<PackageReference Include="GameAttr" Version="0.2.0" />
 ```
 
 ```csharp
