@@ -4,6 +4,7 @@
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
 [![Commit Convention](https://img.shields.io/badge/Commit-Conventional%20Commits-F05032?logo=git)](https://www.conventionalcommits.org/)
 [![Tests](https://img.shields.io/badge/Tests-MSTest-006600?logo=microsoft)](GameAttr.Tests)
+[![Coverage](badges/badge_combined.svg)](GameAttr.Tests)
 
 > **一个通用的、解耦的游戏属性库** — 使用公式 `最终值 = 基础值 × (1 + 百分比加成) + 固定值加成` 计算属性值，这一修饰模型源自 **龙与地下城** 和 **暗黑破坏神2** 等经典 RPG。线程安全，完全测试覆盖，开箱即用。
 
