@@ -4,6 +4,7 @@
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
 [![Commit Convention](https://img.shields.io/badge/Commit-Conventional%20Commits-F05032?logo=git)](https://www.conventionalcommits.org/)
 [![Tests](https://img.shields.io/badge/Tests-MSTest-006600?logo=microsoft)](GameAttr.Tests)
+[![Coverage](badges/badge_combined.svg)](GameAttr.Tests)
 
 > **A generic, decoupled game attribute library** — computes attribute values using the formula `FinalValue = BaseValue × (1 + PercentBonus) + FlatBonus`, a modifier model rooted in classic RPGs like **Dungeons & Dragons** and **Diablo II**. Thread-safe, fully tested, and designed for easy integration into any C# game project.
 
@@ -47,7 +48,7 @@ Where:
 
 ```xml
 <!-- Add from NuGet or reference the project directly -->
-<PackageReference Include="GameAttr" Version="1.0.0" />
+<PackageReference Include="GameAttr" Version="0.2.0" />
 ```
 
 ```csharp
