@@ -19,6 +19,9 @@ $script:replacementWarnings = @()
 $script:totalReplaceCalls = 0
 
 function SafeReplace([string]$text, [string]$old, [string]$new) {
+    if ([string]::IsNullOrEmpty($old)) {
+        throw "SafeReplace: `$old parameter cannot be null or empty."
+    }
     $script:totalReplaceCalls++
     $result = $text.Replace($old, $new)
     if ($result -ceq $text) {
@@ -45,7 +48,7 @@ $content = SafeReplace $content 'x="132.5" y="14"' 'x="142.5" y="14"'
 
 # ======== 4. Shift hover/title overlay rects ========
 $content = SafeReplace $content 'x="90" y="0" width="65" height="20" fill-opacity="0">' `
-                                    'x="120" y="0" width="45" height="20" fill-opacity="0">'
+                                    'x="100" y="0" width="65" height="20" fill-opacity="0">'
 
 # ======== 5. Shift icon paths right by +10 ========
 
@@ -90,35 +93,28 @@ $oldLabelShadow = '<text x="53" y="15" fill="#010101" fill-opacity=".3">Coverage
 $newLabelShadow = @'
 <text class="linecoverage" x="58" y="15" fill="#010101" fill-opacity=".3" font-size="9">Line Coverage</text><text class="branchcoverage" x="58" y="15" fill="#010101" fill-opacity=".3" font-size="9">Branch Coverage</text><text class="methodcoverage" x="58" y="15" fill="#010101" fill-opacity=".3" font-size="9">Method Coverage</text><text class="fullmethodcoverage" x="58" y="15" fill="#010101" fill-opacity=".3" font-size="9">Full Coverage</text>
 '@
-$beforeShadow = $content
-$content = $content -replace [regex]::Escape($oldLabelShadow), $newLabelShadow
-if ($content -eq $beforeShadow) {
-    $script:replacementWarnings += "Label shadow pattern not found (skipped): '$oldLabelShadow'"
-}
+$content = SafeReplace $content $oldLabelShadow $newLabelShadow
 
 $oldLabelFg = '<text x="53" y="14" fill="#fff">Coverage</text>'
 $newLabelFg = @'
 <text class="linecoverage" x="58" y="14" fill="#fff" font-size="9">Line Coverage</text><text class="branchcoverage" x="58" y="14" fill="#fff" font-size="9">Branch Coverage</text><text class="methodcoverage" x="58" y="14" fill="#fff" font-size="9">Method Coverage</text><text class="fullmethodcoverage" x="58" y="14" fill="#fff" font-size="9">Full Coverage</text>
 '@
-$beforeFg = $content
-$content = $content -replace [regex]::Escape($oldLabelFg), $newLabelFg
-if ($content -eq $beforeFg) {
-    $script:replacementWarnings += "Label foreground pattern not found (skipped): '$oldLabelFg'"
+$content = SafeReplace $content $oldLabelFg $newLabelFg
+
+$skipped = $script:replacementWarnings.Count
+$totalReplace = $script:totalReplaceCalls
+
+if ($skipped -gt 0) {
+    if ($skipped -eq $totalReplace) {
+        Write-Error "All $totalReplace replacement patterns skipped — SVG template may have changed, no modifications applied."
+        exit 1
+    }
+    Write-Error "$skipped/$totalReplace replacement(s) skipped — file not written to avoid half-patched SVG. Fix patterns and retry."
+    foreach ($w in $script:replacementWarnings) {
+        Write-Error "  $w"
+    }
+    exit 1
 }
 
 [System.IO.File]::WriteAllText($fullPath.Path, $content)
-
-$skipped = $script:replacementWarnings.Count
-$labelPatterns = 2  # shadow + foreground label checks
-$totalReplace = $script:totalReplaceCalls + $labelPatterns
-
-if ($skipped -eq $totalReplace) {
-    Write-Warning "All patterns skipped — SVG template may have changed, no modifications applied."
-} elseif ($skipped -gt 0) {
-    Write-Warning "Badge patched with $skipped/$totalReplace skipped replacement(s) — SVG template may have changed:"
-    foreach ($w in $script:replacementWarnings) {
-        Write-Warning "  $w"
-    }
-} else {
-    Write-Host "Badge patched: widened to 165px, labels cycle through Line/Branch/Method/Full Coverage"
-}
+Write-Host "Badge patched: widened to 165px, labels cycle through Line/Branch/Method/Full Coverage"

@@ -136,9 +136,9 @@
     </g>
 
     <g>
-        <rect class="linecoverage" x="120" y="0" width="45" height="20" fill-opacity="0"><title>Line coverage</title></rect>
-        <rect class="branchcoverage" x="120" y="0" width="45" height="20" fill-opacity="0"><title>Branch coverage</title></rect>
-        <rect class="methodcoverage" x="120" y="0" width="45" height="20" fill-opacity="0"><title>Method coverage</title></rect>
-        <rect class="fullmethodcoverage" x="120" y="0" width="45" height="20" fill-opacity="0"><title>Full method coverage</title></rect>
+        <rect class="linecoverage" x="100" y="0" width="65" height="20" fill-opacity="0"><title>Line coverage</title></rect>
+        <rect class="branchcoverage" x="100" y="0" width="65" height="20" fill-opacity="0"><title>Branch coverage</title></rect>
+        <rect class="methodcoverage" x="100" y="0" width="65" height="20" fill-opacity="0"><title>Method coverage</title></rect>
+        <rect class="fullmethodcoverage" x="100" y="0" width="65" height="20" fill-opacity="0"><title>Full method coverage</title></rect>
     </g>
 </svg>
