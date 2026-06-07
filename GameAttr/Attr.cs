@@ -31,6 +31,8 @@ public class Attr<TKey, TModId, TValue>
     private void InvalidateCache(TKey key) => _valueCache.TryRemove(key, out _);
 
     /// <summary>Set or overwrite a modifier for the given attribute key.</summary>
+    /// <remarks>Cache is only invalidated when the value actually changes — setting the same
+    /// value again is a no-op that avoids an unnecessary cache miss on the next read.</remarks>
     /// <param name="key">Attribute key.</param>
     /// <param name="type">Modifier type (BaseValue, PercentBonus, FlatBonus).</param>
     /// <param name="modId">Unique modifier identifier.</param>
@@ -45,10 +47,18 @@ public class Attr<TKey, TModId, TValue>
             ConcurrentDictionary<TModId, TValue> byModId =
                 byType.GetOrAdd(type, _ => new ConcurrentDictionary<TModId, TValue>());
 
-            byModId[modId] = value;
-
-            // Invalidate cache so GetValue recomputes on next read
-            InvalidateCache(key);
+            // Only invalidate cache when the value actually changes.
+            // TryAdd succeeds → new modifier was added.
+            // TryAdd fails → modifier exists; check if value differs before overwriting.
+            if (byModId.TryAdd(modId, value))
+            {
+                InvalidateCache(key);
+            }
+            else if (!EqualityComparer<TValue>.Default.Equals(byModId[modId], value))
+            {
+                byModId[modId] = value;
+                InvalidateCache(key);
+            }
         }
     }
 

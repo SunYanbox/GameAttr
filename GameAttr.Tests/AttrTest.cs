@@ -363,6 +363,25 @@ public class AttrTest
     }
 
     [TestMethod]
+    public void SetModifier_SameValue_DoesNotInvalidateCache()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("def", ModifierType.BaseValue, "base", 200);
+
+        // Populate cache for both keys
+        attr.GetValue("atk");
+        attr.GetValue("def");
+
+        // No-op: set the same modifier with the same value.
+        // Cache should NOT be invalidated for either key.
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        Assert.AreEqual(100, attr.GetValue("atk"));
+        Assert.AreEqual(200, attr.GetValue("def"));
+    }
+
+    [TestMethod]
     public void RemoveModifier_InvalidatesCache()
     {
         Attr<string, string, float> attr = new();
