@@ -16,6 +16,7 @@
 - **Generic by design** — `Attr<TKey, TModId, TValue>` supports any key type, modifier ID type, and numeric value type (`INumber<T>`).
 - **Three modifier types** — `BaseValue`, `PercentBonus`, `FlatBonus` cover the full stack of base, percentage, and flat modifiers.
 - **Thread-safe** — per-key locking for concurrent modifier reads/writes, plus a global lock for batch operations.
+- **Cached reads** — `GetValue` caches its result with a generation counter that auto-invalidates on writes; repeated reads of unchanged attributes cost near-zero contention.
 - **Rich modifier removal** — remove by `(key, type, modId)`, `(key, modId)` across all types, or `(modId)` globally.
 - **Zero coupling** — pure logic library with no dependency on any game engine or framework. Run tests in isolation.
 - **Fully documented** — XML doc comments on all public APIs.
@@ -79,7 +80,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 | Method | Description |
 |---|---|
 | `SetModifier(key, type, modId, value)` | Set or overwrite a modifier |
-| `GetValue(key)` | Get the computed attribute value |
+| `GetValue(key)` | Get the computed attribute value (cached — re-reads only when modifiers change) |
 | `RemoveModifier(key, type, modId)` | Remove a specific modifier |
 | `RemoveModifier(key, modId)` | Remove a modifier by ID across all types for a key |
 | `RemoveModifier(modId)` | Remove a modifier by ID globally across all keys |
@@ -99,6 +100,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 
 - **Per-key locking** for `SetModifier`, `GetValue`, `RemoveModifier`, `RemoveAllModifiers` — concurrent operations on different keys never block each other.
 - **Global lock** for `Clear()` and `RemoveModifier(modId)` — ensures atomic cross-key operations.
+- **GetValue caching** — each read result is cached alongside a generation counter that increments on every write to the same key. Subsequent `GetValue` calls check the generation first; if unchanged, the cached value is returned without acquiring the write lock, minimizing contention in read-heavy scenarios.
 - Backed by `ConcurrentDictionary` for lock-free reads where possible.
 
 ---

@@ -13,11 +13,26 @@ public class Attr<TKey, TModId, TValue>
 {
     private readonly ConcurrentDictionary<TKey, ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>> _modifiers = new();
     private readonly ConcurrentDictionary<TKey, object> _keyLocks = new();
+    // Stores computed values alongside the generation at time of computation.
+    // On read, validates that the stored gen matches the current _globalGen,
+    // so a concurrent global mutation (under a different lock) forces re-computation.
+    // This eliminates the TOCTOU of a conditional write-then-check approach,
+    // since the cache entry is always written and validated on the next read.
+    private readonly ConcurrentDictionary<TKey, (TValue Value, long Gen)> _valueCache = new();
     private readonly Lock _globalLock = new();
+
+    // Generation counter to detect concurrent global mutations (RemoveModifier(TModId), Clear).
+    // Incremented under _globalLock; read under per-key lock so GetValue can detect
+    // cross-lock races and avoid caching stale or inconsistent values.
+    private long _globalGen;
 
     private object GetLock(TKey key) => _keyLocks.GetOrAdd(key, _ => new object());
 
+    private void InvalidateCache(TKey key) => _valueCache.TryRemove(key, out _);
+
     /// <summary>Set or overwrite a modifier for the given attribute key.</summary>
+    /// <remarks>Cache is only invalidated when the value actually changes — setting the same
+    /// value again is a no-op that avoids an unnecessary cache miss on the next read.</remarks>
     /// <param name="key">Attribute key.</param>
     /// <param name="type">Modifier type (BaseValue, PercentBonus, FlatBonus).</param>
     /// <param name="modId">Unique modifier identifier.</param>
@@ -32,7 +47,18 @@ public class Attr<TKey, TModId, TValue>
             ConcurrentDictionary<TModId, TValue> byModId =
                 byType.GetOrAdd(type, _ => new ConcurrentDictionary<TModId, TValue>());
 
-            byModId[modId] = value;
+            // Only invalidate cache when the value actually changes.
+            // TryAdd succeeds → new modifier was added.
+            // TryAdd fails → modifier exists; check if value differs before overwriting.
+            if (byModId.TryAdd(modId, value))
+            {
+                InvalidateCache(key);
+            }
+            else if (!EqualityComparer<TValue>.Default.Equals(byModId[modId], value))
+            {
+                byModId[modId] = value;
+                InvalidateCache(key);
+            }
         }
     }
 
@@ -44,11 +70,24 @@ public class Attr<TKey, TModId, TValue>
     {
         lock (GetLock(key))
         {
+            // Cache hit: return cached value only if no global mutation has occurred
+            // since it was computed. Each cache entry stores the generation at time
+            // of computation, so a concurrent RemoveModifier(TModId) or Clear()
+            // (which use a different lock and increment _globalGen) is detected here
+            // and forces re-computation rather than returning stale data.
+            if (_valueCache.TryGetValue(key, out var cached) && cached.Gen == Interlocked.Read(ref _globalGen))
+                return cached.Value;
+
+            // Snapshot generation before reading modifier state, so we can detect
+            // concurrent global mutations (RemoveModifier(TModId), Clear) that use a
+            // different lock and would otherwise race with our cache write.
+            long genBefore = Interlocked.Read(ref _globalGen);
+
             if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
-                return TValue.Zero;
+                return CacheValue(key, TValue.Zero, genBefore);
 
             if (!byType.TryGetValue(ModifierType.BaseValue, out ConcurrentDictionary<TModId, TValue>? byModId) || byModId.IsEmpty)
-                return TValue.Zero;
+                return CacheValue(key, TValue.Zero, genBefore);
 
             TValue baseValue = Sum(byModId);
 
@@ -58,8 +97,24 @@ public class Attr<TKey, TModId, TValue>
             byType.TryGetValue(ModifierType.FlatBonus, out ConcurrentDictionary<TModId, TValue>? flatMods);
             TValue flatBonus = flatMods is not null ? Sum(flatMods) : TValue.Zero;
 
-            return baseValue * (TValue.One + percentBonus) + flatBonus;
+            TValue result = baseValue * (TValue.One + percentBonus) + flatBonus;
+
+            // Store the result with the genBefore stamp. On the next read for this key,
+            // the entry is only returned if cached.Gen still matches _globalGen — detecting
+            // any concurrent global mutation that could have made this result stale.
+            return CacheValue(key, result, genBefore);
         }
+    }
+
+    /// <summary>Cache the computed value alongside the generation at computation time.
+    /// Always stores the entry — stale detection happens on the next read by comparing
+    /// the stored gen against the current _globalGen. This avoids the TOCTOU race of
+    /// a read-then-write check pattern while preserving cross-lock safety.
+    /// The computed value is always returned immediately.</summary>
+    private TValue CacheValue(TKey key, TValue value, long genBefore)
+    {
+        _valueCache[key] = (value, genBefore);
+        return value;
     }
 
     /// <summary>Remove a specific modifier by key, type, and id.</summary>
@@ -75,7 +130,10 @@ public class Attr<TKey, TModId, TValue>
                 return false;
             if (!byType.TryGetValue(type, out ConcurrentDictionary<TModId, TValue>? byModId))
                 return false;
-            return byModId.TryRemove(modId, out _);
+
+            bool removed = byModId.TryRemove(modId, out _);
+            if (removed) InvalidateCache(key);
+            return removed;
         }
     }
 
@@ -90,7 +148,9 @@ public class Attr<TKey, TModId, TValue>
             if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
                 return false;
             List<bool> results = byType.Select(x => x.Value.TryRemove(modId, out _)).ToList();
-            return results.Any(x => x);
+            bool anyRemoved = results.Any(x => x);
+            if (anyRemoved) InvalidateCache(key);
+            return anyRemoved;
         }
     }
 
@@ -105,7 +165,15 @@ public class Attr<TKey, TModId, TValue>
                 .SelectMany(byType => byType.Values)
                 .Select(byModId => byModId.TryRemove(modId, out _))
                 .ToList();
-            return results.Any(x => x);
+            bool anyRemoved = results.Any(x => x);
+            if (anyRemoved)
+            {
+                _valueCache.Clear();
+                // Signal concurrent readers that a global mutation occurred so they
+                // do not cache stale values computed under a per-key lock.
+                Interlocked.Increment(ref _globalGen);
+            }
+            return anyRemoved;
         }
     }
 
@@ -115,7 +183,8 @@ public class Attr<TKey, TModId, TValue>
     {
         lock (GetLock(key))
         {
-            _modifiers.TryRemove(key, out _);
+            if (_modifiers.TryRemove(key, out _))
+                InvalidateCache(key);
         }
     }
 
@@ -125,6 +194,8 @@ public class Attr<TKey, TModId, TValue>
         lock (_globalLock)
         {
             _modifiers.Clear();
+            _valueCache.Clear();
+            Interlocked.Increment(ref _globalGen);
         }
     }
 
