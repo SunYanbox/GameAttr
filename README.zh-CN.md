@@ -17,6 +17,7 @@
 - **泛型设计** — `Attr<TKey, TModId, TValue>` 支持任意键类型、修饰符 ID 类型和数值类型（`INumber<T>`）。
 - **三种修饰符** — `BaseValue`、`PercentBonus`、`FlatBonus` 完整覆盖基础值、百分比加成与固定值加成的属性叠加体系。
 - **线程安全** — 逐键锁定实现并发的修饰符读写，全局锁定用于批量操作。
+- **缓存读取** — `GetValue` 采用代数计数器缓存计算结果，修饰符未变更时重复读取近乎零竞争。
 - **灵活的移除方式** — 支持按 `(key, type, modId)`、按 `(key, modId)` 跨类型、按 `(modId)` 全局移除。
 - **零耦合** — 纯逻辑库，不依赖任何游戏引擎或框架，可在隔离环境中运行测试。
 - **完善的文档** — 所有公开 API 均附带 XML 文档注释。
@@ -78,7 +79,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 | 方法 | 说明 |
 |---|---|
 | `SetModifier(key, type, modId, value)` | 设置或覆盖一个修饰符 |
-| `GetValue(key)` | 获取计算后的属性值 |
+| `GetValue(key)` | 获取计算后的属性值（缓存读 — 修饰符未变更时直接返回缓存） |
 | `RemoveModifier(key, type, modId)` | 移除指定的修饰符 |
 | `RemoveModifier(key, modId)` | 根据 ID 跨类型移除某个键下的所有匹配修饰符 |
 | `RemoveModifier(modId)` | 根据 ID 全局移除所有键下的匹配修饰符 |
@@ -100,6 +101,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 
 - **逐键锁定** — `SetModifier`、`GetValue`、`RemoveModifier`、`RemoveAllModifiers` 操作不同的键互不阻塞。
 - **全局锁定** — `Clear()` 和 `RemoveModifier(modId)` 使用全局锁确保多键操作的原子性。
+- **GetValue 缓存** — 每次计算结果带有代数标记，修饰符写入时递增代数；再次读取时若代数未变则直接返回缓存，无需获取写锁，显著降低读多写少场景下的竞争开销。
 - 内部使用 `ConcurrentDictionary` 实现无锁读取。
 
 ---
