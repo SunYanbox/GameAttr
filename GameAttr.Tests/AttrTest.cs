@@ -518,9 +518,10 @@ public class AttrTest
     }
 
     [TestMethod]
-    public void Clear_ReleasesKeyLocks()
+    public void Clear_AllowsReusingKeys()
     {
-        // Clear() should also clear _keyLocks to prevent memory leaks.
+        // After Clear(), re-using the same keys should work correctly.
+        // (Key lock objects persist; GetLock returns the existing one via GetOrAdd.)
         Attr<string, string, float> attr = new();
 
         attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
@@ -530,7 +531,6 @@ public class AttrTest
 
         attr.Clear();
 
-        // After clear, re-using the same keys should work correctly
         attr.SetModifier("atk", ModifierType.BaseValue, "base", 300);
         Assert.AreEqual(300, attr.GetValue("atk"));
     }

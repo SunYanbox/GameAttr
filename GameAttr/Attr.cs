@@ -13,7 +13,12 @@ public class Attr<TKey, TModId, TValue>
 {
     private readonly ConcurrentDictionary<TKey, ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>> _modifiers = new();
     private readonly ConcurrentDictionary<TKey, object> _keyLocks = new();
-    private readonly ConcurrentDictionary<TKey, TValue> _valueCache = new();
+    // Stores computed values alongside the generation at time of computation.
+    // On read, validates that the stored gen matches the current _globalGen,
+    // so a concurrent global mutation (under a different lock) forces re-computation.
+    // This eliminates the TOCTOU of a conditional write-then-check approach,
+    // since the cache entry is always written and validated on the next read.
+    private readonly ConcurrentDictionary<TKey, (TValue Value, long Gen)> _valueCache = new();
     private readonly Lock _globalLock = new();
 
     // Generation counter to detect concurrent global mutations (RemoveModifier(TModId), Clear).
@@ -55,12 +60,13 @@ public class Attr<TKey, TModId, TValue>
     {
         lock (GetLock(key))
         {
-            // Cache hit: return cached value without recomputing
-            // The ? annotation acknowledges [MaybeNullWhen(false)] from TryGetValue.
-            // For struct TValue, ? is a nullable annotation (not Nullable<T>),
-            // and the compiler treats the returned value as non-null when true.
-            if (_valueCache.TryGetValue(key, out TValue? cached))
-                return cached;
+            // Cache hit: return cached value only if no global mutation has occurred
+            // since it was computed. Each cache entry stores the generation at time
+            // of computation, so a concurrent RemoveModifier(TModId) or Clear()
+            // (which use a different lock and increment _globalGen) is detected here
+            // and forces re-computation rather than returning stale data.
+            if (_valueCache.TryGetValue(key, out var cached) && cached.Gen == Interlocked.Read(ref _globalGen))
+                return cached.Value;
 
             // Snapshot generation before reading modifier state, so we can detect
             // concurrent global mutations (RemoveModifier(TModId), Clear) that use a
@@ -68,10 +74,10 @@ public class Attr<TKey, TModId, TValue>
             long genBefore = Interlocked.Read(ref _globalGen);
 
             if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
-                return CacheOrSkip(key, TValue.Zero, genBefore);
+                return CacheValue(key, TValue.Zero, genBefore);
 
             if (!byType.TryGetValue(ModifierType.BaseValue, out ConcurrentDictionary<TModId, TValue>? byModId) || byModId.IsEmpty)
-                return CacheOrSkip(key, TValue.Zero, genBefore);
+                return CacheValue(key, TValue.Zero, genBefore);
 
             TValue baseValue = Sum(byModId);
 
@@ -83,20 +89,21 @@ public class Attr<TKey, TModId, TValue>
 
             TValue result = baseValue * (TValue.One + percentBonus) + flatBonus;
 
-            // Only cache if no global mutation occurred while we were reading and computing.
-            // Without this check, a concurrent RemoveModifier(TModId) or Clear() could clear
-            // the cache and remove modifiers, then we'd resurrect a stale/inconsistent entry.
-            return CacheOrSkip(key, result, genBefore);
+            // Store the result with the genBefore stamp. On the next read for this key,
+            // the entry is only returned if cached.Gen still matches _globalGen — detecting
+            // any concurrent global mutation that could have made this result stale.
+            return CacheValue(key, result, genBefore);
         }
     }
 
-    /// <summary>Cache the computed value if no global mutation interrupted the computation,
-    /// otherwise skip caching to avoid permanently storing a stale or inconsistent value.
-    /// In either case, return the computed value so the caller gets an answer immediately.</summary>
-    private TValue CacheOrSkip(TKey key, TValue value, long genBefore)
+    /// <summary>Cache the computed value alongside the generation at computation time.
+    /// Always stores the entry — stale detection happens on the next read by comparing
+    /// the stored gen against the current _globalGen. This avoids the TOCTOU race of
+    /// a read-then-write check pattern while preserving cross-lock safety.
+    /// The computed value is always returned immediately.</summary>
+    private TValue CacheValue(TKey key, TValue value, long genBefore)
     {
-        if (Interlocked.Read(ref _globalGen) == genBefore)
-            _valueCache[key] = value;
+        _valueCache[key] = (value, genBefore);
         return value;
     }
 
@@ -178,7 +185,6 @@ public class Attr<TKey, TModId, TValue>
         {
             _modifiers.Clear();
             _valueCache.Clear();
-            _keyLocks.Clear();  // Prevent unbounded growth of lock entries for abandoned keys
             Interlocked.Increment(ref _globalGen);
         }
     }
