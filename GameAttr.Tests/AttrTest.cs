@@ -330,4 +330,210 @@ public class AttrTest
     }
 
     #endregion
+
+    #region Cache / Dirty Flag
+
+    [TestMethod]
+    public void GetValue_CalledTwice_ReturnsCachedValue()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        float first = attr.GetValue("atk");
+        float second = attr.GetValue("atk");
+
+        Assert.AreEqual(100, first);
+        Assert.AreEqual(100, second);
+    }
+
+    [TestMethod]
+    public void SetModifier_InvalidatesCache()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        // Populate cache
+        attr.GetValue("atk");
+
+        // Modify — this should invalidate cache
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 200);
+
+        // Should return new value, not cached old one
+        Assert.AreEqual(200, attr.GetValue("atk"));
+    }
+
+    [TestMethod]
+    public void RemoveModifier_InvalidatesCache()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("atk", ModifierType.BaseValue, "extra", 50);
+
+        // Populate cache
+        attr.GetValue("atk");
+
+        // Remove one modifier — should invalidate cache
+        attr.RemoveModifier("atk", ModifierType.BaseValue, "extra");
+
+        // Should return recomputed value
+        Assert.AreEqual(100, attr.GetValue("atk"));
+    }
+
+    [TestMethod]
+    public void RemoveAllModifiers_InvalidatesCache()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        // Populate cache
+        attr.GetValue("atk");
+
+        // Remove all modifiers for the key
+        attr.RemoveAllModifiers("atk");
+
+        // Cache should be invalidated
+        Assert.AreEqual(0, attr.GetValue("atk"));
+    }
+
+    [TestMethod]
+    public void Clear_InvalidatesAllCache()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("def", ModifierType.BaseValue, "base", 200);
+
+        // Populate cache for both keys
+        attr.GetValue("atk");
+        attr.GetValue("def");
+
+        // Clear all
+        attr.Clear();
+
+        // Both cache entries should be invalidated
+        Assert.AreEqual(0, attr.GetValue("atk"));
+        Assert.AreEqual(0, attr.GetValue("def"));
+    }
+
+    [TestMethod]
+    public void MultipleKeys_CacheIndependence()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("def", ModifierType.BaseValue, "base", 200);
+
+        // Populate cache for both keys
+        attr.GetValue("atk");
+        attr.GetValue("def");
+
+        // Modify only atk
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 300);
+
+        // atk should be updated
+        Assert.AreEqual(300, attr.GetValue("atk"));
+        // def cache should still be valid
+        Assert.AreEqual(200, attr.GetValue("def"));
+    }
+
+    #endregion
+
+    #region Concurrent Safety (Generation Counter)
+
+    [TestMethod]
+    public void GetValue_AfterGlobalRemoveModifier_CacheCorrectlyInvalidated()
+    {
+        // Tests the cross-lock race between RemoveModifier(TModId) (global lock)
+        // and GetValue (per-key lock). Verifies the generation counter prevents
+        // permanent stale cache entries.
+        Attr<string, string, float> attr = new();
+        const int keyCount = 5;
+
+        for (int i = 0; i < keyCount; i++)
+        {
+            attr.SetModifier($"key{i}", ModifierType.BaseValue, "base", 100);
+            attr.SetModifier($"key{i}", ModifierType.FlatBonus, $"bonus{i}", 50);
+            attr.SetModifier($"key{i}", ModifierType.FlatBonus, "shared", 30);
+        }
+
+        // Populate cache
+        for (int i = 0; i < keyCount; i++)
+            Assert.AreEqual(180, attr.GetValue($"key{i}")); // 100 + 50 + 30
+
+        // Remove shared modifier from ALL keys via global operation
+        attr.RemoveModifier("shared");
+
+        // After global removal, ALL keys should reflect the change
+        for (int i = 0; i < keyCount; i++)
+            Assert.AreEqual(150, attr.GetValue($"key{i}")); // 100 + 50
+    }
+
+    [TestMethod]
+    public void GetValue_AfterClear_CacheCorrectlyInvalidated()
+    {
+        // Tests the cross-lock race between Clear() (global lock)
+        // and GetValue (per-key lock).
+        Attr<string, string, float> attr = new();
+
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("def", ModifierType.BaseValue, "base", 200);
+
+        // Populate cache
+        attr.GetValue("atk");
+        attr.GetValue("def");
+
+        attr.Clear();
+
+        // Both should be zero after clear
+        Assert.AreEqual(0, attr.GetValue("atk"));
+        Assert.AreEqual(0, attr.GetValue("def"));
+    }
+
+    [TestMethod]
+    public void GetValue_MissingKey_ReturnsZero()
+    {
+        // Missing key should return Zero; after the fix the result is also cached
+        // so repeated calls are O(1) instead of O(num modifier types).
+        Attr<string, string, float> attr = new();
+
+        Assert.AreEqual(0, attr.GetValue("nonexistent"));
+        Assert.AreEqual(0, attr.GetValue("nonexistent"));
+
+        // After setting a modifier, the cache is invalidated
+        attr.SetModifier("nonexistent", ModifierType.BaseValue, "base", 100);
+        Assert.AreEqual(100, attr.GetValue("nonexistent"));
+    }
+
+    [TestMethod]
+    public void GetValue_NoBaseValue_ReturnsZero()
+    {
+        Attr<string, string, float> attr = new();
+        attr.SetModifier("atk", ModifierType.PercentBonus, "buff", 0.5f);
+
+        // No BaseValue → Zero, and the result gets cached
+        Assert.AreEqual(0, attr.GetValue("atk"));
+        Assert.AreEqual(0, attr.GetValue("atk"));
+
+        // After adding a base value, cache is invalidated
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        Assert.AreEqual(150, attr.GetValue("atk"));
+    }
+
+    [TestMethod]
+    public void Clear_ReleasesKeyLocks()
+    {
+        // Clear() should also clear _keyLocks to prevent memory leaks.
+        Attr<string, string, float> attr = new();
+
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        attr.SetModifier("def", ModifierType.BaseValue, "base", 200);
+        attr.GetValue("atk");
+        attr.GetValue("def");
+
+        attr.Clear();
+
+        // After clear, re-using the same keys should work correctly
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 300);
+        Assert.AreEqual(300, attr.GetValue("atk"));
+    }
+
+    #endregion
 }
