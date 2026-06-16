@@ -21,6 +21,7 @@
 - **缓存读取** — `GetValue` 采用代数计数器缓存计算结果，修饰符未变更时重复读取近乎零竞争。
 - **灵活的移除方式** — 支持按 `(key, type, modId)`、按 `(key, modId)` 跨类型、按 `(modId)` 全局移除。
 - **变更事件系统** — `AttributeChanged` 事件在每次有效变更时触发；某个订阅者的异常不会影响其他订阅者。
+- **日志支持** — `AttrLoggingConfiguration` 通过环境变量配置 `ILoggerFactory`；订阅者异常会被记录而不会导致程序崩溃。
 - **零耦合** — 纯逻辑库，不依赖任何游戏引擎或框架，可在隔离环境中运行测试。
 - **完善的文档** — 所有公开 API 均附带 XML 文档注释。
 - **100% 测试覆盖率** — MSTest 测试套件覆盖基础值、百分比加成、固定值加成、移除语义、枚举键、覆盖写入、边界情况以及事件行为。
@@ -126,6 +127,26 @@ attr.AttributeChanged += args =>
 - 事件在 **逐键锁和全局锁之外** 触发 — 订阅处理程序可以安全调用 `GetValue`（缓存已在事件触发前失效，返回最新数据）。
 - 通过 `GetInvocationList()` 逐个调用每个订阅者 — 某个订阅者的异常 **不会** 阻止其他订阅者接收事件。
 - 将修饰符设置为与原值相同的值不执行任何操作，**不会** 触发 `AttributeChanged` 事件。
+
+### 日志配置
+
+`AttrLoggingConfiguration.CreateLoggerFactory()` 根据环境变量创建 `ILoggerFactory`，用于记录订阅者异常，避免程序崩溃。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `GAMEATTR_LOG_CONSOLE` | `true` | 设为 `"false"` 禁用控制台日志 |
+| `GAMEATTR_LOG_FILE` | `false` | 设为 `"true"` 启用文件日志，输出到 `gameattr.log` |
+
+```csharp
+// 配置日志
+ILoggerFactory loggerFactory = AttrLoggingConfiguration.CreateLoggerFactory();
+ILogger<Attr<string, string, float>> logger = loggerFactory.CreateLogger<Attr<string, string, float>>();
+
+// 将日志记录器传入构造函数 — 订阅者异常会被记录
+var attr = new Attr<string, string, float>(logger);
+```
+
+> **注意：** 传入日志记录器是可选项。如果使用无参构造函数，日志功能将被禁用（使用 NullLogger），订阅者异常会被静默忽略。
 
 ---
 

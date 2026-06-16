@@ -20,6 +20,7 @@
 - **Cached reads** — `GetValue` caches its result with a generation counter that auto-invalidates on writes; repeated reads of unchanged attributes cost near-zero contention.
 - **Rich modifier removal** — remove by `(key, type, modId)`, `(key, modId)` across all types, or `(modId)` globally.
 - **Change event system** — `AttributeChanged` event fires on every effective mutation; one subscriber's exception never blocks others.
+- **Logging support** — `AttrLoggingConfiguration` configures `ILoggerFactory` from environment variables; subscriber exceptions are logged without crashing.
 - **Zero coupling** — pure logic library with no dependency on any game engine or framework. Run tests in isolation.
 - **Fully documented** — XML doc comments on all public APIs.
 - **100% test coverage** — MSTest suite covering base values, percent/flat bonuses, removal semantics, enum keys, overwrites, edge cases, and event behavior.
@@ -125,6 +126,26 @@ attr.AttributeChanged += args =>
 - Fires **outside** per-key and global locks — subscribing handlers can safely call `GetValue` (which returns fresh data, as the cache is invalidated before the event fires).
 - Each subscriber is invoked individually via `GetInvocationList()` — one subscriber's exception does **not** prevent others from receiving the event.
 - Setting a modifier to the same value as before is a no-op and does **not** fire `AttributeChanged`.
+
+### Logging Configuration
+
+`AttrLoggingConfiguration.CreateLoggerFactory()` creates an `ILoggerFactory` configured from environment variables, used to log subscriber exceptions without crashing your application.
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `GAMEATTR_LOG_CONSOLE` | `true` | Set to `"false"` to disable console logging |
+| `GAMEATTR_LOG_FILE` | `false` | Set to `"true"` to enable file logging to `gameattr.log` |
+
+```csharp
+// Configure logging
+ILoggerFactory loggerFactory = AttrLoggingConfiguration.CreateLoggerFactory();
+ILogger<Attr<string, string, float>> logger = loggerFactory.CreateLogger<Attr<string, string, float>>();
+
+// Pass the logger to the constructor — subscriber exceptions will be logged
+var attr = new Attr<string, string, float>(logger);
+```
+
+> **Note:** Passing a logger is optional. If you use the parameterless constructor, logging is disabled (NullLogger) and subscriber exceptions are silently suppressed.
 
 ---
 
