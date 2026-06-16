@@ -26,9 +26,85 @@ public class Attr<TKey, TModId, TValue>
     // cross-lock races and avoid caching stale or inconsistent values.
     private long _globalGen;
 
+    private Action<AttrChangedEventArgs<TKey, TValue>>? _onAttributeChanged;
+    private readonly Lock _eventLock = new();
+
     private object GetLock(TKey key) => _keyLocks.GetOrAdd(key, _ => new object());
 
     private void InvalidateCache(TKey key) => _valueCache.TryRemove(key, out _);
+
+    // ── Value computation ──────────────────────────────────────────────
+
+    /// <summary>Compute the attribute value without checking cache. Assumes the per-key lock
+    /// is held. Does NOT cache the result — callers must handle caching.</summary>
+    private TValue ComputeValueLocked(TKey key)
+    {
+        if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType)
+            || !byType.TryGetValue(ModifierType.BaseValue, out ConcurrentDictionary<TModId, TValue>? byModId) || byModId.IsEmpty)
+            return TValue.Zero;
+
+        TValue baseValue = Sum(byModId);
+
+        byType.TryGetValue(ModifierType.PercentBonus, out ConcurrentDictionary<TModId, TValue>? percentMods);
+        TValue percentBonus = percentMods is not null ? Sum(percentMods) : TValue.Zero;
+
+        byType.TryGetValue(ModifierType.FlatBonus, out ConcurrentDictionary<TModId, TValue>? flatMods);
+        TValue flatBonus = flatMods is not null ? Sum(flatMods) : TValue.Zero;
+
+        return baseValue * (TValue.One + percentBonus) + flatBonus;
+    }
+
+    // ── Event ──────────────────────────────────────────────────────────
+
+    /// <summary>Fires when an attribute value changes due to a modifier mutation.
+    /// The event is raised outside per-key locks to avoid deadlocks.</summary>
+    public event Action<AttrChangedEventArgs<TKey, TValue>>? AttributeChanged
+    {
+        add
+        {
+            lock (_eventLock)
+            {
+                _onAttributeChanged += value;
+            }
+        }
+        remove
+        {
+            lock (_eventLock)
+            {
+                _onAttributeChanged -= value;
+            }
+        }
+    }
+
+    /// <summary>Raise the <see cref="AttributeChanged"/> event if there are subscribers.
+    /// Each subscriber is invoked individually so that one subscriber's exception does not
+    /// prevent subsequent subscribers from receiving the event.</summary>
+    private void RaiseAttributeChanged(TKey key, AttrChangeType changeType, TValue newValue)
+    {
+        Action<AttrChangedEventArgs<TKey, TValue>>? handler;
+        lock (_eventLock)
+        {
+            handler = _onAttributeChanged;
+        }
+
+        if (handler is null)
+            return;
+
+        var args = new AttrChangedEventArgs<TKey, TValue>(key, changeType, newValue);
+        foreach (Delegate subscriber in handler.GetInvocationList())
+        {
+            try
+            {
+                ((Action<AttrChangedEventArgs<TKey, TValue>>)subscriber)(args);
+            }
+            catch (Exception ex)
+            {
+                // TODO: 记录异常，防止单个订阅者异常影响其他订阅者
+            }
+        }
+    }
+
+    // ── Set modifier ───────────────────────────────────────────────────
 
     /// <summary>Set or overwrite a modifier for the given attribute key.</summary>
     /// <remarks>Cache is only invalidated when the value actually changes — setting the same
@@ -39,6 +115,8 @@ public class Attr<TKey, TModId, TValue>
     /// <param name="value">Modifier value.</param>
     public void SetModifier(TKey key, ModifierType type, TModId modId, TValue value)
     {
+        AttrChangedEventArgs<TKey, TValue>? eventArgs = null;
+
         lock (GetLock(key))
         {
             ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>> byType =
@@ -53,14 +131,23 @@ public class Attr<TKey, TModId, TValue>
             if (byModId.TryAdd(modId, value))
             {
                 InvalidateCache(key);
+                if (_onAttributeChanged is not null)
+                    eventArgs = new(key, AttrChangeType.SetModifier, ComputeValueLocked(key));
             }
             else if (!EqualityComparer<TValue>.Default.Equals(byModId[modId], value))
             {
                 byModId[modId] = value;
                 InvalidateCache(key);
+                if (_onAttributeChanged is not null)
+                    eventArgs = new(key, AttrChangeType.SetModifier, ComputeValueLocked(key));
             }
         }
+
+        if (eventArgs is not null)
+            RaiseAttributeChanged(eventArgs.Key, eventArgs.ChangeType, eventArgs.NewValue);
     }
+
+    // ── Get value ──────────────────────────────────────────────────────
 
     /// <summary>Get the computed attribute value.</summary>
     /// <remarks>Value = base × (1 + percentBonus) + flatBonus</remarks>
@@ -83,21 +170,7 @@ public class Attr<TKey, TModId, TValue>
             // different lock and would otherwise race with our cache write.
             long genBefore = Interlocked.Read(ref _globalGen);
 
-            if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
-                return CacheValue(key, TValue.Zero, genBefore);
-
-            if (!byType.TryGetValue(ModifierType.BaseValue, out ConcurrentDictionary<TModId, TValue>? byModId) || byModId.IsEmpty)
-                return CacheValue(key, TValue.Zero, genBefore);
-
-            TValue baseValue = Sum(byModId);
-
-            byType.TryGetValue(ModifierType.PercentBonus, out ConcurrentDictionary<TModId, TValue>? percentMods);
-            TValue percentBonus = percentMods is not null ? Sum(percentMods) : TValue.Zero;
-
-            byType.TryGetValue(ModifierType.FlatBonus, out ConcurrentDictionary<TModId, TValue>? flatMods);
-            TValue flatBonus = flatMods is not null ? Sum(flatMods) : TValue.Zero;
-
-            TValue result = baseValue * (TValue.One + percentBonus) + flatBonus;
+            TValue result = ComputeValueLocked(key);
 
             // Store the result with the genBefore stamp. On the next read for this key,
             // the entry is only returned if cached.Gen still matches _globalGen — detecting
@@ -117,6 +190,8 @@ public class Attr<TKey, TModId, TValue>
         return value;
     }
 
+    // ── Remove modifier (key + type + modId) ───────────────────────────
+
     /// <summary>Remove a specific modifier by key, type, and id.</summary>
     /// <param name="key">Attribute key.</param>
     /// <param name="type">Modifier type.</param>
@@ -124,6 +199,9 @@ public class Attr<TKey, TModId, TValue>
     /// <returns><c>true</c> if the modifier was found and removed.</returns>
     public bool RemoveModifier(TKey key, ModifierType type, TModId modId)
     {
+        AttrChangedEventArgs<TKey, TValue>? eventArgs = null;
+        bool removed;
+
         lock (GetLock(key))
         {
             if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
@@ -131,10 +209,18 @@ public class Attr<TKey, TModId, TValue>
             if (!byType.TryGetValue(type, out ConcurrentDictionary<TModId, TValue>? byModId))
                 return false;
 
-            bool removed = byModId.TryRemove(modId, out _);
-            if (removed) InvalidateCache(key);
-            return removed;
+            removed = byModId.TryRemove(modId, out _);
+            if (removed)
+            {
+                InvalidateCache(key);
+                if (_onAttributeChanged is not null)
+                    eventArgs = new AttrChangedEventArgs<TKey, TValue>(key, AttrChangeType.RemoveModifier, ComputeValueLocked(key));
+            }
         }
+
+        if (eventArgs is not null)
+            RaiseAttributeChanged(eventArgs.Key, eventArgs.ChangeType, eventArgs.NewValue);
+        return removed;
     }
 
     /// <summary>Remove a modifier by key and id across all modifier types.</summary>
@@ -143,15 +229,26 @@ public class Attr<TKey, TModId, TValue>
     /// <returns><c>true</c> if any modifier with the given id was removed.</returns>
     public bool RemoveModifier(TKey key, TModId modId)
     {
+        AttrChangedEventArgs<TKey, TValue>? eventArgs = null;
+        bool anyRemoved;
+
         lock (GetLock(key))
         {
             if (!_modifiers.TryGetValue(key, out ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>? byType))
                 return false;
             List<bool> results = byType.Select(x => x.Value.TryRemove(modId, out _)).ToList();
-            bool anyRemoved = results.Any(x => x);
-            if (anyRemoved) InvalidateCache(key);
-            return anyRemoved;
+            anyRemoved = results.Any(x => x);
+            if (anyRemoved)
+            {
+                InvalidateCache(key);
+                if (_onAttributeChanged is not null)
+                    eventArgs = new(key, AttrChangeType.RemoveModifier, ComputeValueLocked(key));
+            }
         }
+
+        if (eventArgs is not null)
+            RaiseAttributeChanged(eventArgs.Key, eventArgs.ChangeType, eventArgs.NewValue);
+        return anyRemoved;
     }
 
     /// <summary>Remove all modifiers matching the given id across all keys and types.</summary>
@@ -159,45 +256,87 @@ public class Attr<TKey, TModId, TValue>
     /// <returns><c>true</c> if any modifier was removed.</returns>
     public bool RemoveModifier(TModId modId)
     {
+        List<TKey> affected = new();
+        bool anyRemoved;
+
         lock (_globalLock)
         {
-            List<bool> results = _modifiers.Values
-                .SelectMany(byType => byType.Values)
-                .Select(byModId => byModId.TryRemove(modId, out _))
-                .ToList();
-            bool anyRemoved = results.Any(x => x);
+            anyRemoved = false;
+            foreach (KeyValuePair<TKey, ConcurrentDictionary<ModifierType, ConcurrentDictionary<TModId, TValue>>> kvp in _modifiers)
+            {
+                bool keyChanged = false;
+                foreach (ConcurrentDictionary<TModId, TValue> byModId in kvp.Value.Values)
+                {
+                    if (byModId.TryRemove(modId, out _))
+                        keyChanged = true;
+                }
+                if (keyChanged)
+                {
+                    anyRemoved = true;
+                    affected.Add(kvp.Key);
+                }
+            }
+
             if (anyRemoved)
             {
                 _valueCache.Clear();
-                // Signal concurrent readers that a global mutation occurred so they
-                // do not cache stale values computed under a per-key lock.
                 Interlocked.Increment(ref _globalGen);
             }
-            return anyRemoved;
         }
+
+        // Fire events outside the global lock. Recompute each affected key's value
+        // under its per-key lock (the modifier state is consistent by now).
+        foreach (TKey key in affected)
+        {
+            TValue newValue;
+            lock (GetLock(key))
+            {
+                newValue = ComputeValueLocked(key);
+            }
+            RaiseAttributeChanged(key, AttrChangeType.RemoveModifier, newValue);
+        }
+
+        return anyRemoved;
     }
 
     /// <summary>Remove all modifiers for the given attribute key.</summary>
     /// <param name="key">Attribute key.</param>
     public void RemoveAllModifiers(TKey key)
     {
+        AttrChangedEventArgs<TKey, TValue>? eventArgs = null;
+
         lock (GetLock(key))
         {
             if (_modifiers.TryRemove(key, out _))
+            {
                 InvalidateCache(key);
+                if (_onAttributeChanged is not null)
+                    eventArgs = new(key, AttrChangeType.RemoveAll, TValue.Zero);
+            }
         }
+
+        if (eventArgs is not null)
+            RaiseAttributeChanged(eventArgs.Key, eventArgs.ChangeType, eventArgs.NewValue);
     }
 
     /// <summary>Remove all modifiers for all attribute keys.</summary>
     public void Clear()
     {
+        List<TKey> affectedKeys = new();
+
         lock (_globalLock)
         {
+            affectedKeys.AddRange(_modifiers.Keys);
             _modifiers.Clear();
             _valueCache.Clear();
             Interlocked.Increment(ref _globalGen);
         }
+
+        foreach (TKey key in affectedKeys)
+            RaiseAttributeChanged(key, AttrChangeType.Clear, TValue.Zero);
     }
+
+    // ── Helpers ────────────────────────────────────────────────────────
 
     private static TValue Sum(ConcurrentDictionary<TModId, TValue> dict)
     {
