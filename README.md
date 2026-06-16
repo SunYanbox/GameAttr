@@ -4,7 +4,7 @@
 [![.NET](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
 [![Commit Convention](https://img.shields.io/badge/Commit-Conventional%20Commits-F05032?logo=git)](https://www.conventionalcommits.org/)
 [![Tests](https://img.shields.io/badge/Tests-MSTest-006600?logo=microsoft)](GameAttr.Tests)
-[![Coverage](badges/badge_combined.svg)](GameAttr.Tests)
+[![Coverage](https://img.shields.io/codecov/c/github/SunYanbox/GameAttr)](https://codecov.io/gh/SunYanbox/GameAttr)
 
 > **A generic, decoupled game attribute library** — computes attribute values using the formula `FinalValue = BaseValue × (1 + PercentBonus) + FlatBonus`, a modifier model rooted in classic RPGs like **Dungeons & Dragons** and **Diablo II**. Thread-safe, fully tested, and designed for easy integration into any C# game project.
 
@@ -112,10 +112,9 @@ Prerequisites:
 
 ```bash
 dotnet add package coverlet.collector
-dotnet tool install --global dotnet-reportgenerator-globaltool
 ```
 
-On **Windows**, run the convenience script:
+On **Windows**, run the convenience script to generate a local HTML report:
 
 ```bash
 cd GameAttr.Tests
@@ -129,6 +128,8 @@ Or manually:
 ```bash
 dotnet test GameAttr.Tests/GameAttr.Tests.csproj --collect:"XPlat Code Coverage"
 ```
+
+> Coverage data is automatically uploaded to [Codecov](https://codecov.io/gh/SunYanbox/GameAttr) on every CI run. The badge above reflects the latest `main` branch coverage.
 
 ---
 
