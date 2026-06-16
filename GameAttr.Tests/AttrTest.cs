@@ -1,3 +1,4 @@
+using System;
 using JetBrains.Annotations;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -555,4 +556,18 @@ public class AttrTest
     }
 
     #endregion
+
+    [TestMethod]
+    public void Constructor_NullLogger_ThrowsArgumentNullException()
+    {
+        try
+        {
+            new Attr<string, string, float>(null!);
+            Assert.Fail("Expected ArgumentNullException was not thrown");
+        }
+        catch (ArgumentNullException)
+        {
+            // Expected — logger was null
+        }
+    }
 }
