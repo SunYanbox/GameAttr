@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Numerics;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace GameAttr;
 
@@ -26,8 +28,22 @@ public class Attr<TKey, TModId, TValue>
     // cross-lock races and avoid caching stale or inconsistent values.
     private long _globalGen;
 
+    private readonly ILogger _logger;
     private Action<AttrChangedEventArgs<TKey, TValue>>? _onAttributeChanged;
     private readonly Lock _eventLock = new();
+
+    /// <summary>Initializes a new instance with logging disabled (NullLogger).</summary>
+    public Attr()
+    {
+        _logger = NullLogger<Attr<TKey, TModId, TValue>>.Instance;
+    }
+
+    /// <summary>Initializes a new instance with the specified logger.</summary>
+    /// <param name="logger">Logger for recording diagnostic events (e.g., subscriber exceptions).</param>
+    public Attr(ILogger<Attr<TKey, TModId, TValue>> logger)
+    {
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
 
     private object GetLock(TKey key) => _keyLocks.GetOrAdd(key, _ => new object());
 
@@ -99,7 +115,9 @@ public class Attr<TKey, TModId, TValue>
             }
             catch (Exception ex)
             {
-                // TODO: 记录异常，防止单个订阅者异常影响其他订阅者
+                _logger.LogWarning(ex,
+                    "Subscriber threw an exception while handling {ChangeType} event for key {Key}",
+                    changeType, key);
             }
         }
     }

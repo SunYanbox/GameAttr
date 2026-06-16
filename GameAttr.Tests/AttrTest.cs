@@ -1,5 +1,6 @@
 using System;
 using JetBrains.Annotations;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace GameAttr.Tests;
@@ -557,6 +558,31 @@ public class AttrTest
 
     #endregion
 
+    #region Logger Constructor
+
+    [TestMethod]
+    public void Constructor_WithLogger_SetsModifierAndGetsValue()
+    {
+        var logger = NullLogger<Attr<string, string, float>>.Instance;
+        Attr<string, string, float> attr = new(logger);
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+        Assert.AreEqual(100, attr.GetValue("atk"));
+    }
+
+    [TestMethod]
+    public void Constructor_WithLogger_SubscriberThrows_DoesNotThrow()
+    {
+        var logger = NullLogger<Attr<string, string, float>>.Instance;
+        Attr<string, string, float> attr = new(logger);
+        int fireCount = 0;
+        attr.AttributeChanged += _ => throw new InvalidOperationException("Test exception");
+        attr.AttributeChanged += _ => fireCount++;
+
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        Assert.AreEqual(1, fireCount);
+    }
+
     [TestMethod]
     public void Constructor_NullLogger_ThrowsArgumentNullException()
     {
@@ -570,4 +596,6 @@ public class AttrTest
             // Expected — logger was null
         }
     }
+
+    #endregion
 }

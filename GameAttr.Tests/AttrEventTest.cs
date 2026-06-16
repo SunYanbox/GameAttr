@@ -243,6 +243,19 @@ public class AttrEventTest
         Assert.AreEqual(1, count2);
     }
 
+    [TestMethod]
+    public void SetModifier_SubscriberThrows_OtherSubscribersStillReceiveEvent()
+    {
+        Attr<string, string, float> attr = new();
+        int fireCount = 0;
+        attr.AttributeChanged += _ => throw new InvalidOperationException("Test exception");
+        attr.AttributeChanged += _ => fireCount++;
+
+        attr.SetModifier("atk", ModifierType.BaseValue, "base", 100);
+
+        Assert.AreEqual(1, fireCount);
+    }
+
     #endregion
 
     #region Event unsubscription
