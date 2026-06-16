@@ -19,9 +19,10 @@
 - **线程安全** — 逐键锁定实现并发的修饰符读写，全局锁定用于批量操作。
 - **缓存读取** — `GetValue` 采用代数计数器缓存计算结果，修饰符未变更时重复读取近乎零竞争。
 - **灵活的移除方式** — 支持按 `(key, type, modId)`、按 `(key, modId)` 跨类型、按 `(modId)` 全局移除。
+- **变更事件系统** — `AttributeChanged` 事件在每次有效变更时触发；某个订阅者的异常不会影响其他订阅者。
 - **零耦合** — 纯逻辑库，不依赖任何游戏引擎或框架，可在隔离环境中运行测试。
 - **完善的文档** — 所有公开 API 均附带 XML 文档注释。
-- **100% 测试覆盖率** — MSTest 测试套件覆盖基础值、百分比加成、固定值加成、移除语义、枚举键、覆盖写入和边界情况。
+- **100% 测试覆盖率** — MSTest 测试套件覆盖基础值、百分比加成、固定值加成、移除语义、枚举键、覆盖写入、边界情况以及事件行为。
 
 ---
 
@@ -68,6 +69,12 @@ float final = attr.GetValue("atk");  // 1000 * (1 + 0.3) + 50 = 1350
 
 // 移除某个修饰符
 attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
+
+// 订阅属性变更事件
+attr.AttributeChanged += args =>
+{
+    Console.WriteLine($"[{args.Key}] {args.ChangeType} → {args.NewValue}");
+};
 ```
 
 ---
@@ -76,7 +83,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 
 ### `Attr<TKey, TModId, TValue>`
 
-| 方法 | 说明 |
+| 方法 / 事件 | 说明 |
 |---|---|
 | `SetModifier(key, type, modId, value)` | 设置或覆盖一个修饰符 |
 | `GetValue(key)` | 获取计算后的属性值（缓存读 — 修饰符未变更时直接返回缓存） |
@@ -86,6 +93,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 | `RemoveAllModifiers(key)` | 移除某个键的所有修饰符 |
 | `Clear()` | 清空所有修饰符 |
 | `ToString()` | 输出所有修饰符的 JSON 快照 |
+| `AttributeChanged` | **事件** — 修饰符变更导致属性值变化时触发（详见下文） |
 
 ### `ModifierType`
 
@@ -95,12 +103,36 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 | `PercentBonus` | 基于基础值的百分比加成（如 `0.1` = +10%），多个百分比加法叠加 |
 | `FlatBonus` | 固定数值加成，在百分比计算后加算 |
 
+### `AttrChangeType`
+
+| 枚举值 | 说明 |
+|---|---|
+| `SetModifier` | 设置或覆盖修饰符导致数值变化 |
+| `RemoveModifier` | 移除单个修饰符导致数值变化 |
+| `RemoveAll` | 移除某个键的所有修饰符 |
+| `Clear` | 清空所有键的所有修饰符 |
+
+### `AttrChangedEventArgs<TKey, TValue>`
+
+| 属性 | 类型 | 说明 |
+|---|---|---|
+| `Key` | `TKey` | 发生变更的属性键 |
+| `ChangeType` | `AttrChangeType` | 变更类型 |
+| `NewValue` | `TValue` | 变更后重新计算的值 |
+
+### 事件安全保证
+
+- 事件在 **逐键锁和全局锁之外** 触发 — 订阅处理程序可以安全调用 `GetValue`（缓存已在事件触发前失效，返回最新数据）。
+- 通过 `GetInvocationList()` 逐个调用每个订阅者 — 某个订阅者的异常 **不会** 阻止其他订阅者接收事件。
+- 将修饰符设置为与原值相同的值不执行任何操作，**不会** 触发 `AttributeChanged` 事件。
+
 ---
 
 ## 线程安全
 
 - **逐键锁定** — `SetModifier`、`GetValue`、`RemoveModifier`、`RemoveAllModifiers` 操作不同的键互不阻塞。
 - **全局锁定** — `Clear()` 和 `RemoveModifier(modId)` 使用全局锁确保多键操作的原子性。
+- **事件锁** — `AttributeChanged` 的订阅/取消订阅由专用锁序列化；事件的触发在 **逐键锁和全局锁之外** 执行，防止处理程序回调属性时发生死锁。
 - **GetValue 缓存** — 每次计算结果带有代数标记，修饰符写入时递增代数；再次读取时若代数未变则直接返回缓存，无需获取写锁，显著降低读多写少场景下的竞争开销。
 - 内部使用 `ConcurrentDictionary` 实现无锁读取。
 

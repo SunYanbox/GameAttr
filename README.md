@@ -18,9 +18,10 @@
 - **Thread-safe** — per-key locking for concurrent modifier reads/writes, plus a global lock for batch operations.
 - **Cached reads** — `GetValue` caches its result with a generation counter that auto-invalidates on writes; repeated reads of unchanged attributes cost near-zero contention.
 - **Rich modifier removal** — remove by `(key, type, modId)`, `(key, modId)` across all types, or `(modId)` globally.
+- **Change event system** — `AttributeChanged` event fires on every effective mutation; one subscriber's exception never blocks others.
 - **Zero coupling** — pure logic library with no dependency on any game engine or framework. Run tests in isolation.
 - **Fully documented** — XML doc comments on all public APIs.
-- **100% test coverage** — MSTest suite covering base values, percent/flat bonuses, removal semantics, enum keys, overwrites, and edge cases.
+- **100% test coverage** — MSTest suite covering base values, percent/flat bonuses, removal semantics, enum keys, overwrites, edge cases, and event behavior.
 
 ---
 
@@ -69,6 +70,12 @@ float final = attr.GetValue("atk");  // 1000 * (1 + 0.3) + 50 = 1350
 
 // Remove a modifier
 attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
+
+// Subscribe to attribute changes
+attr.AttributeChanged += args =>
+{
+    Console.WriteLine($"[{args.Key}] {args.ChangeType} → {args.NewValue}");
+};
 ```
 
 ---
@@ -77,7 +84,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 
 ### `Attr<TKey, TModId, TValue>`
 
-| Method | Description |
+| Method / Event | Description |
 |---|---|
 | `SetModifier(key, type, modId, value)` | Set or overwrite a modifier |
 | `GetValue(key)` | Get the computed attribute value (cached — re-reads only when modifiers change) |
@@ -87,6 +94,7 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 | `RemoveAllModifiers(key)` | Remove all modifiers for a key |
 | `Clear()` | Remove all modifiers |
 | `ToString()` | JSON snapshot of all modifiers |
+| `AttributeChanged` | **Event** — fires when a modifier mutation changes the computed value (see below) |
 
 ### `ModifierType`
 
@@ -94,12 +102,36 @@ attr.RemoveModifier("atk", ModifierType.PercentBonus, "buff1");
 - **`PercentBonus`** — percentage of the base value (e.g., `0.1` = +10%). Multiple percent bonuses stack additively.
 - **`FlatBonus`** — flat value added after percentage calculation.
 
+### `AttrChangeType`
+
+| Value | Description |
+|---|---|
+| `SetModifier` | A modifier was set or overwritten, causing the value to change |
+| `RemoveModifier` | A single modifier was removed, causing the value to change |
+| `RemoveAll` | All modifiers for a key were removed |
+| `Clear` | All modifiers for all keys were cleared |
+
+### `AttrChangedEventArgs<TKey, TValue>`
+
+| Property | Type | Description |
+|---|---|---|
+| `Key` | `TKey` | The attribute key that changed |
+| `ChangeType` | `AttrChangeType` | What kind of change occurred |
+| `NewValue` | `TValue` | The recomputed value after the change |
+
+### Event Safety
+
+- Fires **outside** per-key and global locks — subscribing handlers can safely call `GetValue` (which returns fresh data, as the cache is invalidated before the event fires).
+- Each subscriber is invoked individually via `GetInvocationList()` — one subscriber's exception does **not** prevent others from receiving the event.
+- Setting a modifier to the same value as before is a no-op and does **not** fire `AttributeChanged`.
+
 ---
 
 ## Thread Safety
 
 - **Per-key locking** for `SetModifier`, `GetValue`, `RemoveModifier`, `RemoveAllModifiers` — concurrent operations on different keys never block each other.
 - **Global lock** for `Clear()` and `RemoveModifier(modId)` — ensures atomic cross-key operations.
+- **Event lock** — `AttributeChanged` add/remove is serialized with a dedicated lock; event invocation occurs **outside** per-key and global locks to prevent deadlocks when handlers call back into the attribute.
 - **GetValue caching** — each read result is cached alongside a generation counter that increments on every write to the same key. Subsequent `GetValue` calls check the generation first; if unchanged, the cached value is returned without acquiring the write lock, minimizing contention in read-heavy scenarios.
 - Backed by `ConcurrentDictionary` for lock-free reads where possible.
 
