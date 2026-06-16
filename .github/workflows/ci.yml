@@ -37,5 +37,12 @@ jobs:
       - name: Build
         run: dotnet build -c Release --no-restore
 
-      - name: Run tests
-        run: dotnet test -c Release --no-build
+      - name: Run tests with coverage
+        run: dotnet test -c Release --no-build --collect:"XPlat Code Coverage"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: GameAttr.Tests/TestResults
+          fail_ci_if_error: false
